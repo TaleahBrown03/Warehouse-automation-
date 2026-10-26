@@ -1,0 +1,96 @@
+{
+  "source_file": "file_Amazon Sale Report.csv",
+  "output_file": "amazon_sale_report_cleaned.csv",
+  "source_rows": 128976,
+  "output_rows": 128017,
+  "duplicate_candidates_removed": 959,
+  "duplicate_rule": "Duplicate across all source columns except the source row-index column (index/ndex); keep first occurrence.",
+  "duplicate_candidates_audit_file": "reports/amazon_sale_report_duplicate_candidates.csv",
+  "remaining_duplicate_rows_by_rule": 0,
+  "blank_cells_preserved_by_column": {
+    "currency": 7563,
+    "Amount": 7563,
+    "ship-city": 32,
+    "ship-state": 32,
+    "ship-postal-code": 32,
+    "ship-country": 32,
+    "fulfilled-by": 89085,
+    "New": 128017,
+    "PendingS": 128017
+  },
+  "columns_preserved": [
+    "ndex",
+    "Order ID",
+    "Date",
+    "Status",
+    "Fulfilment",
+    "Sales Channel",
+    "ship-service-level",
+    "Category",
+    "Size",
+    "Courier Status",
+    "Qty",
+    "currency",
+    "Amount",
+    "ship-city",
+    "ship-state",
+    "ship-postal-code",
+    "ship-country",
+    "B2B",
+    "fulfilled-by",
+    "New",
+    "PendingS"
+  ],
+  "required_feature_blanks": {
+    "Order ID": 0,
+    "Date": 0,
+    "Status": 0,
+    "Fulfilment": 0,
+    "Sales Channel": 0,
+    "ship-service-level": 0,
+    "Category": 0,
+    "Size": 0,
+    "Courier Status": 0,
+    "Qty": 0
+  },
+  "engine_validation": "passed",
+  "quality_checks": [
+    {
+      "issue": "Conflict",
+      "lines": 6788,
+      "detail": "Status is Cancelled but Courier Status is On the Way"
+    },
+    {
+      "issue": "Conflict",
+      "lines": 201,
+      "detail": "Status is shipped but Courier Status is Cancelled or Unshipped"
+    },
+    {
+      "issue": "Conflict",
+      "lines": 99,
+      "detail": "Line is not cancelled but quantity is 0"
+    },
+    {
+      "issue": "Missing value",
+      "lines": 7563,
+      "detail": "Blank amount (treated as unknown, not 0)"
+    },
+    {
+      "issue": "Missing value",
+      "lines": 33,
+      "detail": "Blank or unusable ship state"
+    },
+    {
+      "issue": "Partial day",
+      "lines": 171,
+      "detail": "Lines on the first day in the file (2022-03-31); excluded from daily alerts"
+    },
+    {
+      "issue": "Partial day",
+      "lines": 655,
+      "detail": "Lines on the last day in the file (2022-06-29); excluded from daily alerts"
+    }
+  ],
+  "values_filled_or_inferred": 0,
+  "source_modified": false
+}
