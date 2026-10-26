@@ -1,4 +1,4 @@
-ndex,Order ID,Date,Status,Fulfilment,Sales Channel,ship-service-level,Category,Size,Courier Status,Qty,currency,Amount,ship-city,ship-state,ship-postal-code,ship-country,B2B,fulfilled-by,New,PendingS
+index,Order ID,Date,Status,Fulfilment,Sales Channel,ship-service-level,Category,Size,Courier Status,Qty,currency,Amount,ship-city,ship-state,ship-postal-code,ship-country,B2B,fulfilled-by,New,PendingS
 0,405-8078784-5731545,04-30-22,Cancelled,Merchant,Amazon.in,Standard,T-shirt,S,On the Way,0,INR,647.62,MUMBAI,MAHARASHTRA,400081,IN,FALSE,Easy Ship,,
 1,171-9198151-1101146,04-30-22,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Shirt,3XL,Shipped,1,INR,406,BENGALURU,KARNATAKA,560085,IN,FALSE,Easy Ship,,
 2,404-0687676-7273146,04-30-22,Shipped,Amazon,Amazon.in,Expedited,Shirt,XL,Shipped,1,INR,329,NAVI MUMBAI,MAHARASHTRA,410210,IN,TRUE,,,
@@ -2098,7 +2098,7 @@ ndex,Order ID,Date,Status,Fulfilment,Sales Channel,ship-service-level,Category,S
 2152,408-8404034-6727569,04-29-22,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Shirt,M,Shipped,1,INR,495,NAVI MUMBAI,MAHARASHTRA,410206,IN,FALSE,Easy Ship,,
 2153,405-3785775-0227556,04-29-22,Shipped,Amazon,Amazon.in,Expedited,Shirt,XXL,Shipped,1,INR,517,THIRUVALLUR,TAMIL NADU,602001,IN,TRUE,,,
 2154,405-2756529-8689123,04-29-22,Shipped,Amazon,Amazon.in,Expedited,Shirt,XXL,Shipped,1,INR,487,THIRUVALLUR,TAMIL NADU,602001,IN,TRUE,,,
-2155,407-6965720-0843551,04-29-22,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Shirt,L,Shipped,1,INR,517,HASSAN (Amazon Arun),KARNATAKA,573201,IN,FALSE,Easy Ship,,
+2155,407-6965720-0843551,04-29-22,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Shirt,L,Shipped,1,INR,517,HASSAN (Arun),KARNATAKA,573201,IN,FALSE,Easy Ship,,
 2156,404-8525115-3493163,04-29-22,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,T-shirt,M,Shipped,1,INR,1163,MUMBAI,MAHARASHTRA,400081,IN,FALSE,Easy Ship,,
 2157,404-3370292-0401110,04-29-22,Shipped,Amazon,Amazon.in,Expedited,T-shirt,M,Shipped,1,INR,1099,MUMBAI,MAHARASHTRA,400081,IN,FALSE,,,
 2158,404-3370292-0401110,04-29-22,Shipped,Amazon,Amazon.in,Expedited,T-shirt,XS,Shipped,1,INR,1099,MUMBAI,MAHARASHTRA,400081,IN,FALSE,,,
@@ -83111,7 +83111,7 @@ ndex,Order ID,Date,Status,Fulfilment,Sales Channel,ship-service-level,Category,S
 83779,402-9247662-5577941,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,T-shirt,L,Shipped,1,INR,922,Nanded,MAHARASHTRA,431605,IN,FALSE,,,
 83780,406-3946247-8980332,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,T-shirt,L,Shipped,1,INR,680,BENGALURU,KARNATAKA,560102,IN,FALSE,,,
 83781,406-2810837-0862735,05-04-2022,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Shirt,XL,Shipped,1,INR,487,HYDERABAD,TELANGANA,500032,IN,FALSE,Easy Ship,,
-83782,407-4351363-4853126,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,L,Shipped,1,INR,487,HASSAN (Amazon Arun),KARNATAKA,573201,IN,FALSE,,,
+83782,407-4351363-4853126,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,L,Shipped,1,INR,487,HASSAN (Arun),KARNATAKA,573201,IN,FALSE,,,
 83783,405-1866729-2709934,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,M,Shipped,1,INR,399,CHENNAI,TAMIL NADU,600073,IN,FALSE,,,
 83784,408-2219724-2364350,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,XS,Shipped,1,INR,368,MODINAGAR,UTTAR PRADESH,201204,IN,FALSE,,,
 83785,408-8112364-3748327,05-04-2022,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Blazzer,M,Shipped,1,INR,724,chennai,TAMIL NADU,600116,IN,FALSE,Easy Ship,,
@@ -83586,7 +83586,7 @@ ndex,Order ID,Date,Status,Fulfilment,Sales Channel,ship-service-level,Category,S
 84258,404-9093961-5517121,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,S,Shipped,1,INR,348,BANTVAL,KARNATAKA,574260,IN,FALSE,,,
 84259,405-1432780-0058702,05-04-2022,Shipped - Delivered to Buyer,Merchant,Amazon.in,Standard,Blazzer,L,Shipped,1,INR,724,BENGALURU,KARNATAKA,560017,IN,FALSE,Easy Ship,,
 84260,402-9071116-4407554,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,M,Shipped,1,INR,399,NASHIK,MAHARASHTRA,422004,IN,FALSE,,,
-84261,407-1224780-5281118,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,L,Shipped,1,INR,399,HASSAN (Amazon Arun),KARNATAKA,573201,IN,FALSE,,,
+84261,407-1224780-5281118,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,L,Shipped,1,INR,399,HASSAN (Arun),KARNATAKA,573201,IN,FALSE,,,
 84262,408-2428109-8044314,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,T-shirt,XL,Shipped,1,INR,1432,DELHI,DELHI,110052,IN,FALSE,,,
 84263,404-9728577-9265124,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Shirt,XS,Shipped,1,INR,357,HYDERABAD,TELANGANA,500002,IN,FALSE,,,
 84264,408-7760861-2471555,05-04-2022,Shipped,Amazon,Amazon.in,Expedited,Blazzer,3XL,Shipped,1,INR,743,RAJAMPET,ANDHRA PRADESH,516115,IN,FALSE,,,

@@ -1,12 +1,15 @@
+import json
+import os
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from engine import (CLEANED_DATA_FILE, DATA_FILE, OUTCOMES, DataValidationError, Thresholds, aged_unshipped,
+from clean_report import VALIDATION_FILE
+from engine import (DATA_FILE, DATA_FILE_ENV, OUTCOMES, RAW_DATA_FILE, DataValidationError, Thresholds, aged_unshipped,
                     channel_days, complete_days, compute_kpis, customer_segments, daily_cancellations,
-                    daily_sales, detect_exceptions, high_cancellation_runs, inventory_demand, load_data,
-                    merchant_returns_by_state, performance_by_dimension, run_pipeline)
+                    daily_sales, detect_exceptions, high_cancellation_runs, inventory_demand, is_deduplicated_copy,
+                    load_data, merchant_returns_by_state, performance_by_dimension, run_pipeline)
 from sql_demo import load_into_sqlite, cancellations_by_day, reconcile, QUERY_FILE
 
 APP_DIR = Path(__file__).parent
@@ -15,8 +18,15 @@ st.set_page_config(page_title="Order Fulfilment Monitoring", page_icon="📦", l
 st.title("📦 Order Fulfilment Monitoring")
 st.caption("Portfolio demo • Public Amazon India sales report (order dates 2022-03-31 to 2022-06-29) • "
            "Not connected to FreshDirect, Amazon, or any live system")
-if DATA_FILE == CLEANED_DATA_FILE:
-    st.caption("Using the validated deduplicated copy. Missing source values are preserved as unknown, not filled.")
+if is_deduplicated_copy(DATA_FILE):
+    removed = json.loads(VALIDATION_FILE.read_text())["duplicate_candidates_removed"] if VALIDATION_FILE.exists() else "?"
+    data_kind = (f"candidate-deduplicated copy of {RAW_DATA_FILE.name}: {removed} duplicate candidates removed "
+                 "(an assumption, not proven errors); the raw source is kept unchanged")
+else:
+    data_kind = "raw data as supplied: duplicate candidates are kept"
+st.caption(f"Data file: **{DATA_FILE.name}** • {data_kind}"
+           + (f" • set by {DATA_FILE_ENV}" if os.environ.get(DATA_FILE_ENV) else "")
+           + " • Missing values are kept as unknown, not filled.")
 
 @st.cache_data(show_spinner="Loading order lines…")
 def cached_data(path):

@@ -1,12 +1,16 @@
 {
-  "source_file": "file_Amazon Sale Report.csv",
-  "output_file": "amazon_sale_report_cleaned.csv",
+  "source_file": "data/amazon_sale_report.csv",
+  "source_sha256": "a84251af2337266a2ccb768a5acf51b73c6a71d46ee4ab94b38f291894e052f8",
+  "output_file": "data/amazon_sale_report_cleaned.csv",
+  "output_sha256": "69b627ec265a0c693161f5a01a9f38479ce4b77e7121a3f495719061f2ba0dde",
   "source_rows": 128976,
   "output_rows": 128017,
   "duplicate_candidates_removed": 959,
-  "duplicate_rule": "Duplicate across all source columns except the source row-index column (index/ndex); keep first occurrence.",
+  "duplicate_rule": "Duplicate candidate: identical to an earlier row in every source column except the source row-index column ('index'); the first occurrence is kept. Candidates are not proven errors, because the file has no SKU or order-line identifier.",
   "duplicate_candidates_audit_file": "reports/amazon_sale_report_duplicate_candidates.csv",
+  "duplicate_candidates_audit_sha256": "f2f7427b4046793c4b51f1fbffaaeba2c9090071350ba33f579c9a8936e84d67",
   "remaining_duplicate_rows_by_rule": 0,
+  "retained_rows_identical_to_source": true,
   "blank_cells_preserved_by_column": {
     "currency": 7563,
     "Amount": 7563,
@@ -19,7 +23,7 @@
     "PendingS": 128017
   },
   "columns_preserved": [
-    "ndex",
+    "index",
     "Order ID",
     "Date",
     "Status",

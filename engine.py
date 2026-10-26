@@ -11,39 +11,30 @@ from pathlib import Path
 from typing import Any
 import pandas as pd
 
-DEFAULT_DATA_FILE = Path(__file__).parent / "data" / "amazon_sale_report.csv"
-ATTACHMENT_ROOT = Path("/home/codespace/.vscode-remote/data/agentSessionData")
+RAW_DATA_FILE = Path(__file__).parent / "data" / "amazon_sale_report.csv"
+CLEANED_DATA_FILE = Path(__file__).parent / "data" / "amazon_sale_report_cleaned.csv"
+DATA_FILE_ENV = "AMAZON_SALE_REPORT_CSV"
+SOURCE_INDEX_COLUMN = "index"  # the source file's row number; not a business field
 
 
 def resolve_data_file() -> Path:
-    """Prefer the newest attached Amazon sales report CSV when one is available."""
-    env_path = os.environ.get("AMAZON_SALE_REPORT_CSV")
-    if env_path:
-        candidate = Path(env_path).expanduser()
-        if candidate.exists():
-            return candidate
+    """Pick the CSV to analyse: an explicit override, else the repository's deduplicated copy, else its raw file.
 
-    candidates: list[Path] = []
-    if ATTACHMENT_ROOT.exists():
-        for path in ATTACHMENT_ROOT.rglob("*.csv"):
-            name = path.name.lower()
-            if "amazon" in name and "sale" in name and "report" in name:
-                candidates.append(path)
-
-    if candidates:
-        return max(candidates, key=lambda p: p.stat().st_mtime)
-    return DEFAULT_DATA_FILE
+    An override is returned as given, even if it does not exist, so a wrong path fails loudly instead of
+    another file being analysed in its place. No other location is searched.
+    """
+    override = os.environ.get(DATA_FILE_ENV)
+    if override:
+        return Path(override).expanduser()
+    return CLEANED_DATA_FILE if CLEANED_DATA_FILE.exists() else RAW_DATA_FILE
 
 
-SOURCE_DATA_FILE = resolve_data_file()
-CLEANED_DATA_FILE = Path(__file__).parent / "data" / "amazon_sale_report_cleaned.csv"
-DATA_FILE = (
-    CLEANED_DATA_FILE
-    if CLEANED_DATA_FILE.exists()
-    and SOURCE_DATA_FILE.exists()
-    and CLEANED_DATA_FILE.stat().st_mtime >= SOURCE_DATA_FILE.stat().st_mtime
-    else SOURCE_DATA_FILE
-)
+def is_deduplicated_copy(path: str | Path) -> bool:
+    """True when `path` is the repository's candidate-deduplicated copy; any other file is used as supplied."""
+    return Path(path).resolve() == CLEANED_DATA_FILE.resolve()
+
+
+DATA_FILE = resolve_data_file()
 
 # Source column -> name used in the code. "Sales Channel" is kept as a feature even though it is not
 # required to validate or alert on every synthetic test row.
@@ -130,13 +121,19 @@ def clean(raw: pd.DataFrame) -> pd.DataFrame:
     unknown = set(df["fulfilment"].dropna()) - FULFILMENT
     if unknown:
         problems.append(f"Unknown fulfilment value(s): {_examples(sorted(unknown))}")
-    for col in ["qty","amount"]:
-        numeric = pd.to_numeric(df[col], errors="coerce")
-        numeric_series = pd.Series(numeric, index=df.index)
-        bad = (numeric_series.isna() & df[col].notna()) | (numeric_series < 0)
-        if bool(bad.any()):
-            problems.append(f"{int(bad.sum())} line(s) have a {col} that is not a non-negative number")
-        df[col] = numeric_series
+    # Qty must be a whole number of units: "1.9" would otherwise be silently truncated to 1. Blanks are reported above.
+    qty = pd.Series(pd.to_numeric(df["qty"], errors="coerce"), index=df.index)
+    whole = (qty >= 0) & (qty < float("inf")) & (qty % 1 == 0)
+    bad = df["qty"].notna() & ~whole
+    if bool(bad.any()):
+        problems.append(f"{int(bad.sum())} line(s) have a qty that is not a non-negative whole number "
+                        f"(fractional, infinite, negative, or not a number): {_examples(df.loc[bad, 'qty'])}")
+    df["qty"] = qty
+    amount = pd.Series(pd.to_numeric(df["amount"], errors="coerce"), index=df.index)
+    bad = (amount.isna() & df["amount"].notna()) | (amount < 0)
+    if bool(bad.any()):
+        problems.append(f"{int(bad.sum())} line(s) have an amount that is not a non-negative number")
+    df["amount"] = amount
     if problems:
         raise DataValidationError(problems)
     df["order_date"] = dates
@@ -152,13 +149,20 @@ def clean(raw: pd.DataFrame) -> pd.DataFrame:
     df["returned"] = df["outcome"].eq("Returned")
     return df
 
+def duplicate_candidates(raw: pd.DataFrame) -> pd.Series:
+    """Rows identical to an earlier row in every column except the source row index (the first copy is not marked).
+
+    Only candidates: without SKU or order-line identifiers, identical rows may still be genuine separate lines.
+    """
+    return raw.duplicated(subset=[c for c in raw.columns if c != SOURCE_INDEX_COLUMN], keep="first")
+
 def data_quality(raw: pd.DataFrame, lines: pd.DataFrame) -> pd.DataFrame:
     """Issues that do not stop the analysis but should be known before trusting it."""
     first, last = lines["order_date"].min(), lines["order_date"].max()
     checks = [
-        ("Possible duplicate", raw.drop(columns=["index"], errors="ignore").duplicated().sum(),
-         "Extra copies of a row that is identical in every column. Kept, because the file has no SKU column "
-         "to tell genuine repeat lines apart."),
+        ("Possible duplicate", duplicate_candidates(raw).sum(),
+         "Extra copies of a row that is identical in every column except the row index. Kept in this file, because "
+         "without a SKU or line number genuine repeat lines can't be told apart."),
         ("Conflict", (lines["status"].eq("Cancelled") & lines["courier_status"].eq("On the Way")).sum(),
          "Status is Cancelled but Courier Status is On the Way"),
         ("Conflict", (lines["shipped"] & lines["courier_status"].isin(["Cancelled","Unshipped"])).sum(),
@@ -315,7 +319,9 @@ def channel_days(lines: pd.DataFrame, t: Thresholds) -> pd.DataFrame:
     out["cancel_rate"] = out["cancelled_lines"] / out["order_lines"]
     usual = out.groupby("fulfilment")["cancelled_lines"].sum() / out.groupby("fulfilment")["order_lines"].sum()
     out["usual_rate"] = out["fulfilment"].map(usual)
-    out["high"] = out["cancel_rate"] >= out["usual_rate"] * t.cancel_multiplier
+    # With a zero baseline, 0 >= 0 × multiplier would mark every day as high
+    out["high"] = ((out["usual_rate"] > 0) & (out["cancel_rate"] > 0)
+                   & (out["cancel_rate"] >= out["usual_rate"] * t.cancel_multiplier))
     return out[cols].reset_index(drop=True)
 
 def high_cancellation_runs(lines: pd.DataFrame, t: Thresholds) -> pd.DataFrame:
@@ -347,7 +353,10 @@ def merchant_returns_by_state(lines: pd.DataFrame, t: Thresholds) -> pd.DataFram
         return pd.DataFrame(columns=cols)
     out = m.groupby("ship_state", as_index=False).agg(shipped_lines=("order_id","size"), returned_lines=("returned","sum"))
     out["return_rate"] = out["returned_lines"] / out["shipped_lines"]
-    out["flagged"] = (out["shipped_lines"] >= t.min_state_lines) & (out["return_rate"] >= m["returned"].mean() * t.return_multiplier)
+    average = m["returned"].mean()
+    # A zero average would otherwise flag every large state, even with no returns at all
+    out["flagged"] = ((out["shipped_lines"] >= t.min_state_lines) & (average > 0) & (out["return_rate"] > 0)
+                      & (out["return_rate"] >= average * t.return_multiplier))
     return out[cols].sort_values("return_rate", ascending=False).reset_index(drop=True)
 
 def aged_unshipped(lines: pd.DataFrame, t: Thresholds) -> pd.DataFrame:

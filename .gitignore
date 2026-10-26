@@ -3,4 +3,5 @@ __pycache__/
 .pytest_cache/
 reports/*
 !reports/.gitkeep
+!reports/amazon_sale_report_duplicate_candidates.csv
 *.db
