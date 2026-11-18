@@ -38,6 +38,8 @@ pip install -r requirements.txt
 3. Otherwise `data/amazon_sale_report.csv` (the raw source).
 
 No other folder is searched. The dashboard shows the file name and whether it is raw or candidate-deduplicated.
+The dashboard hashes the selected file contents for its cache key, so replacing a CSV at the same path refreshes
+the analysis on the next rerun.
 `sql_demo.py --file <path>` also accepts an explicit file.
 
 The included source file is ["AmazonSalesReport" by Arpit
@@ -69,7 +71,8 @@ pytest                                                   # run the tests
 ```
 
 In the dashboard, **Write report CSVs** saves `reports/exceptions_latest.csv`, `reports/kpis_latest.csv`, and
-`reports/data_quality_latest.csv` using the current sidebar settings.
+`reports/data_quality_latest.csv` using the current sidebar settings. Outputs are staged before replacement, so a
+failed generation preserves the previous reports.
 
 ## Core features tracked
 - Order ID
