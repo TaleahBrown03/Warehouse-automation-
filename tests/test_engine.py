@@ -1,13 +1,17 @@
 import json
+import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 import pandas as pd
 import pytest
 import engine
 from engine import (clean, load_data, data_quality, compute_kpis, detect_exceptions, daily_cancellations, channel_days,
                     high_cancellation_runs, merchant_returns_by_state, aged_unshipped, daily_sales,
                     performance_by_dimension, customer_segments, inventory_demand, run_pipeline, resolve_data_file,
-                    is_deduplicated_copy, duplicate_candidates, Thresholds, DataValidationError, COLUMNS,
-                    CLEANED_DATA_FILE, RAW_DATA_FILE)
-from sql_demo import load_into_sqlite, cancellations_by_day, reconcile
+                    is_deduplicated_copy, duplicate_candidates, data_file_fingerprint, Thresholds, DataValidationError, COLUMNS,
+                    read_csv_text, CLEANED_DATA_FILE, RAW_DATA_FILE)
+from sql_demo import load_into_sqlite, cancellations_by_day, default_date_range, reconcile
 from clean_report import create_clean_copy, read_as_text, sha256, VALIDATION_FILE
 
 LINE = {"Order ID":"O1", "Date":"04-10-22", "Status":"Shipped", "Fulfilment":"Merchant", "ship-service-level":"Standard",
@@ -114,6 +118,17 @@ def test_explicit_override_is_used_even_if_missing(monkeypatch, tmp_path):
     with pytest.raises(FileNotFoundError):
         load_data(resolve_data_file())
 
+def test_data_file_fingerprint_tracks_same_path_content_changes(tmp_path):
+    path = tmp_path / "input.csv"
+    path.write_bytes(b"old")
+    original_stat = path.stat()
+    first = data_file_fingerprint(path)
+    path.write_bytes(b"new")
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert path.stat().st_size == original_stat.st_size
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+    assert data_file_fingerprint(path) != first
+
 def test_dashboard_label_distinguishes_raw_from_deduplicated():
     assert is_deduplicated_copy(CLEANED_DATA_FILE)
     assert not is_deduplicated_copy(RAW_DATA_FILE)
@@ -148,7 +163,9 @@ def test_sales_customer_and_inventory_analyses():
     ({"Qty":"-inf"}, "qty that is not a non-negative whole number"),
     ({"Qty":"two"}, "qty that is not a non-negative whole number"),
     ({"Qty":None}, "blank qty"),
-    ({"Amount":"abc"}, "amount that is not a non-negative number"),
+    ({"Amount":"abc"}, "amount that is not a finite non-negative number"),
+    ({"Amount":"inf"}, "finite non-negative number"),
+    ({"Amount":"-inf"}, "finite non-negative number"),
     ({"Order ID":None}, "blank order_id"),
 ])
 def test_bad_values_are_reported_clearly(row, message):
@@ -172,6 +189,24 @@ def test_missing_column_and_missing_file(tmp_path):
 
 def test_blank_amount_stays_unknown_not_zero():
     assert pd.isna(lines([{"Amount":None}]).loc[0, "amount"])
+
+def test_load_data_preserves_literal_na_tokens_but_keeps_empty_cells_unknown(tmp_path):
+    path = tmp_path / "input.csv"
+    raw([{"Category":"NA", "ship-city":"null", "Amount":None}]).to_csv(path, index=False)
+    loaded = load_data(path)["lines"].iloc[0]
+    assert loaded["category"] == "NA"
+    assert loaded["ship_city"] == "NULL"
+    assert pd.isna(loaded["amount"])
+    assert pd.isna(read_csv_text(path).loc[0, "Amount"])
+
+def test_b2b_values_are_strict_and_blanks_remain_unknown():
+    df = lines([{"B2B":" true "}, {"Order ID":"O2", "B2B":"FALSE"}, {"Order ID":"O3", "B2B":None}])
+    assert df["b2b"].iloc[:2].tolist() == [True, False]
+    assert pd.isna(df["b2b"].iloc[2])
+    quality = data_quality(raw([{"B2B":None}]), df.iloc[[2]]).set_index("detail")["lines"]
+    assert quality["Blank B2B flag (treated as unknown)"] == 1
+    with pytest.raises(DataValidationError, match="Unknown B2B value.*MAYBE"):
+        lines([{"B2B":"MAYBE"}])
 
 def test_data_quality_counts_duplicates_and_conflicts():
     r = raw([{}, {}, {"Order ID":"O2", "Status":"Cancelled", "Courier Status":"On the Way", "Qty":"0"}])
@@ -201,6 +236,48 @@ def test_empty_file_gives_no_rates_and_no_exceptions(tmp_path):
     assert k["order_lines"] == 0 and k["cancellation_rate"] is None and k["merchant_return_rate"] is None
     assert detect_exceptions(data).empty
     assert run_pipeline(path, report_dir=tmp_path / "reports")["exceptions"].empty
+
+def test_report_staging_failure_preserves_previous_outputs(tmp_path, monkeypatch):
+    source = tmp_path / "input.csv"
+    raw([{}]).to_csv(source, index=False)
+    report_dir = tmp_path / "nested" / "reports"
+    report_dir.mkdir(parents=True)
+    names = ["exceptions_latest.csv", "data_quality_latest.csv", "kpis_latest.csv"]
+    for name in names:
+        (report_dir / name).write_text(f"previous {name}")
+    original_to_csv = pd.DataFrame.to_csv
+
+    def fail_on_second_report(self, path, *args, **kwargs):
+        if Path(path).name == "data_quality_latest.csv":
+            raise OSError("disk full")
+        return original_to_csv(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", fail_on_second_report)
+    with pytest.raises(OSError, match="disk full"):
+        run_pipeline(source, report_dir=report_dir)
+    assert [(report_dir / name).read_text() for name in names] == [f"previous {name}" for name in names]
+    assert not list(report_dir.glob(".report-run-*"))
+
+def test_report_publish_failure_rolls_back_replaced_outputs(tmp_path, monkeypatch):
+    source = tmp_path / "input.csv"
+    raw([{}]).to_csv(source, index=False)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    names = ["exceptions_latest.csv", "data_quality_latest.csv", "kpis_latest.csv"]
+    for name in names:
+        (report_dir / name).write_text(f"previous {name}")
+    original_replace = os.replace
+
+    def fail_second_replace(source_path, target_path):
+        source_path = Path(source_path)
+        if source_path.name == "data_quality_latest.csv" and source_path.parent.name.startswith(".report-run-"):
+            raise OSError("replace failed")
+        return original_replace(source_path, target_path)
+
+    monkeypatch.setattr(engine.os, "replace", fail_second_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        run_pipeline(source, report_dir=report_dir)
+    assert [(report_dir / name).read_text() for name in names] == [f"previous {name}" for name in names]
 
 # ---------- Aged unshipped ----------
 
@@ -264,15 +341,39 @@ def test_return_hotspot_needs_volume_and_rate():
 
 def test_sql_matches_pandas_and_respects_where_clause():
     df = lines(days("2022-04-01", 4, [1, 2, 3, 4]) + days("2022-04-01", 4, [0, 0, 0, 9], fulfilment="Amazon"))
-    conn = load_into_sqlite(df)
-    result = cancellations_by_day(conn, "Merchant", "2022-04-02", "2022-04-03")
+    with closing(load_into_sqlite(df)) as conn:
+        result = cancellations_by_day(conn, "Merchant", "2022-04-02", "2022-04-03")
+        matches = reconcile(result, df, "Merchant", "2022-04-02", "2022-04-03")[0]
     assert result.to_dict("list") == {"order_date":["2022-04-02", "2022-04-03"], "order_lines":[10, 10],
                                       "cancelled_lines":[2, 3], "cancelled_pct":[20.0, 30.0]}
-    assert reconcile(result, df, "Merchant", "2022-04-02", "2022-04-03")[0]
+    assert matches
 
 def test_sql_dates_sort_across_years():
     df = lines([{"Order ID":"A", "Date":"12-31-21"}, {"Order ID":"B", "Date":"01-01-22"}])
-    assert cancellations_by_day(load_into_sqlite(df))["order_date"].tolist() == ["2021-12-31", "2022-01-01"]
+    with closing(load_into_sqlite(df)) as conn:
+        assert cancellations_by_day(conn)["order_date"].tolist() == ["2021-12-31", "2022-01-01"]
+
+def test_sql_date_defaults_are_bounded_by_dataset_dates():
+    assert default_date_range(pd.Timestamp("2022-03-01").date(), pd.Timestamp("2022-06-30").date()) == (
+        pd.Timestamp("2022-04-10").date(), pd.Timestamp("2022-04-20").date())
+    assert default_date_range(pd.Timestamp("2023-01-01").date(), pd.Timestamp("2023-02-01").date()) == (
+        pd.Timestamp("2023-01-01").date(), pd.Timestamp("2023-01-01").date())
+    assert default_date_range(pd.Timestamp("2022-04-15").date(), pd.Timestamp("2022-04-16").date()) == (
+        pd.Timestamp("2022-04-15").date(), pd.Timestamp("2022-04-16").date())
+    with pytest.raises(ValueError, match="lower date bound"):
+        default_date_range(pd.Timestamp("2022-04-16").date(), pd.Timestamp("2022-04-15").date())
+
+def test_sql_load_rolls_back_table_replacement_on_insert_error(tmp_path):
+    db = tmp_path / "orders.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE order_lines (marker TEXT)")
+        conn.execute("INSERT INTO order_lines VALUES ('previous')")
+    invalid = lines([{}])
+    invalid.loc[0, "status"] = object()
+    with pytest.raises((sqlite3.InterfaceError, sqlite3.ProgrammingError)):
+        load_into_sqlite(invalid, db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT marker FROM order_lines").fetchone() == ("previous",)
 
 # ---------- The real file ----------
 
@@ -317,8 +418,8 @@ def test_real_file_headline_numbers():
 @real
 def test_real_file_sql_matches_pandas_for_both_channels():
     df = load_data(CLEANED_DATA_FILE)["lines"]
-    conn = load_into_sqlite(df)
-    for channel in ["Merchant", "Amazon"]:
-        result = cancellations_by_day(conn, channel)
-        assert reconcile(result, df, channel)[0]
-        assert result["order_lines"].sum() == (df["fulfilment"] == channel).sum()
+    with closing(load_into_sqlite(df)) as conn:
+        for channel in ["Merchant", "Amazon"]:
+            result = cancellations_by_day(conn, channel)
+            assert reconcile(result, df, channel)[0]
+            assert result["order_lines"].sum() == (df["fulfilment"] == channel).sum()

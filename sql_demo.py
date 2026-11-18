@@ -6,6 +6,7 @@ Run:  python sql_demo.py                                  (Merchant, every date,
 """
 import argparse
 import sqlite3
+from datetime import date
 from pathlib import Path
 import pandas as pd
 from engine import load_data, daily_cancellations, DATA_FILE
@@ -14,14 +15,57 @@ QUERY_FILE = Path(__file__).parent / "sql" / "cancellations_by_day.sql"
 SQL_COLUMNS = ["order_id","order_date","status","fulfilment","service_level","category","size",
                "courier_status","qty","amount","ship_state"]
 
-def load_into_sqlite(lines, db=":memory:"):
-    """Write the cleaned order lines to SQLite with order_date as 'YYYY-MM-DD' text.
 
-    The source file uses MM-DD-YY, which would sort 01-05-23 before 12-30-22. ISO dates sort correctly.
+def default_date_range(lower: date, upper: date) -> tuple[date, date]:
+    """Keep the demo's preferred SQL dates inside the selected dataset's available range."""
+    if lower > upper:
+        raise ValueError("The lower date bound must not be after the upper date bound.")
+    start = min(max(date(2022, 4, 10), lower), upper)
+    end = min(max(date(2022, 4, 20), start), upper)
+    return start, end
+
+
+def load_into_sqlite(lines, db=":memory:"):
+    """Replace the SQLite table atomically and return its open connection.
+
+    The caller owns and must close the returned connection. Dates are stored as ISO text so they sort
+    and compare chronologically.
     """
     conn = sqlite3.connect(db)
-    out = lines[SQL_COLUMNS].assign(order_date=lines["order_date"].dt.strftime("%Y-%m-%d"))
-    out.to_sql("order_lines", conn, if_exists="replace", index=False)
+    try:
+        out = lines[SQL_COLUMNS].assign(order_date=lines["order_date"].dt.strftime("%Y-%m-%d"))
+        schema = """
+            CREATE TABLE order_lines (
+                order_id TEXT NOT NULL,
+                order_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                fulfilment TEXT NOT NULL,
+                service_level TEXT,
+                category TEXT,
+                size TEXT,
+                courier_status TEXT,
+                qty INTEGER NOT NULL,
+                amount REAL,
+                ship_state TEXT
+            )
+        """
+        insert = f"INSERT INTO order_lines ({', '.join(SQL_COLUMNS)}) VALUES ({', '.join('?' for _ in SQL_COLUMNS)})"
+        with conn:
+            conn.execute("BEGIN")
+            conn.execute("DROP TABLE IF EXISTS order_lines")
+            conn.execute(schema)
+
+            rows = (
+                tuple(
+                    None if pd.isna(value) else value.item() if hasattr(value, "item") else value
+                    for value in row
+                )
+                for row in out.itertuples(index=False, name=None)
+            )
+            conn.executemany(insert, rows)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 def cancellations_by_day(
@@ -63,14 +107,17 @@ def main():
     args = parser.parse_args()
     lines = load_data(args.file)["lines"]
     conn = load_into_sqlite(lines, args.db)
-    result = cancellations_by_day(conn, args.fulfilment, args.start, args.end)
-    print(QUERY_FILE.read_text())
-    print(f"Result for {args.fulfilment} ({len(result)} days):")
-    print(result.to_string(index=False))
-    total = int(result["order_lines"].sum())
-    cancelled = int(result["cancelled_lines"].sum())
-    print(f"\nTotal: {cancelled:,} cancelled of {total:,} order lines ({100 * cancelled / total:.1f}%)" if total else "\nNo lines.")
-    matches, _ = reconcile(result, lines, args.fulfilment, args.start, args.end)
+    try:
+        result = cancellations_by_day(conn, args.fulfilment, args.start, args.end)
+        print(QUERY_FILE.read_text())
+        print(f"Result for {args.fulfilment} ({len(result)} days):")
+        print(result.to_string(index=False))
+        total = int(result["order_lines"].sum())
+        cancelled = int(result["cancelled_lines"].sum())
+        print(f"\nTotal: {cancelled:,} cancelled of {total:,} order lines ({100 * cancelled / total:.1f}%)" if total else "\nNo lines.")
+        matches, _ = reconcile(result, lines, args.fulfilment, args.start, args.end)
+    finally:
+        conn.close()
     print("Reconciliation with pandas:", "MATCH" if matches else "MISMATCH")
     return 0 if matches else 1
 

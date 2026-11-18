@@ -4,7 +4,10 @@ One row in the file is one order line. Statuses are a single snapshot taken when
 exported. Every alert is a prompt for a person to investigate; nothing here changes inventory,
 staffing, orders, or any safety-critical process.
 """
+import hashlib
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +30,20 @@ def resolve_data_file() -> Path:
     if override:
         return Path(override).expanduser()
     return CLEANED_DATA_FILE if CLEANED_DATA_FILE.exists() else RAW_DATA_FILE
+
+
+def data_file_fingerprint(path: str | Path) -> str:
+    """Return a content hash so cached analyses refresh when a file changes in place."""
+    digest = hashlib.sha256()
+    with Path(path).expanduser().open("rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def read_csv_text(path: str | Path) -> pd.DataFrame:
+    """Read CSV fields as text, treating empty cells as missing but preserving literal NA/null tokens."""
+    return pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""])
 
 
 def is_deduplicated_copy(path: str | Path) -> bool:
@@ -121,6 +138,10 @@ def clean(raw: pd.DataFrame) -> pd.DataFrame:
     unknown = set(df["fulfilment"].dropna()) - FULFILMENT
     if unknown:
         problems.append(f"Unknown fulfilment value(s): {_examples(sorted(unknown))}")
+    b2b = df["b2b"].str.strip().str.upper()
+    unknown_b2b = set(b2b.dropna()) - {"TRUE", "FALSE"}
+    if unknown_b2b:
+        problems.append(f"Unknown B2B value(s): {_examples(sorted(unknown_b2b))}. Expected TRUE or FALSE.")
     # Qty must be a whole number of units: "1.9" would otherwise be silently truncated to 1. Blanks are reported above.
     qty = pd.Series(pd.to_numeric(df["qty"], errors="coerce"), index=df.index)
     whole = (qty >= 0) & (qty < float("inf")) & (qty % 1 == 0)
@@ -130,9 +151,9 @@ def clean(raw: pd.DataFrame) -> pd.DataFrame:
                         f"(fractional, infinite, negative, or not a number): {_examples(df.loc[bad, 'qty'])}")
     df["qty"] = qty
     amount = pd.Series(pd.to_numeric(df["amount"], errors="coerce"), index=df.index)
-    bad = (amount.isna() & df["amount"].notna()) | (amount < 0)
+    bad = (amount.isna() & df["amount"].notna()) | (amount < 0) | amount.isin([float("inf"), float("-inf")])
     if bool(bad.any()):
-        problems.append(f"{int(bad.sum())} line(s) have an amount that is not a non-negative number")
+        problems.append(f"{int(bad.sum())} line(s) have an amount that is not a finite non-negative number")
     df["amount"] = amount
     if problems:
         raise DataValidationError(problems)
@@ -142,7 +163,7 @@ def clean(raw: pd.DataFrame) -> pd.DataFrame:
     df["ship_state"] = df["ship_state"].fillna("UNKNOWN").str.upper().str.strip().replace(STATE_FIXES)
     df["ship_city"] = df["ship_city"].fillna("UNKNOWN").str.upper().str.strip()
     df["sales_channel"] = df["sales_channel"].fillna("UNKNOWN").str.strip()
-    df["b2b"] = df["b2b"].str.upper().eq("TRUE")
+    df["b2b"] = b2b.map({"TRUE": True, "FALSE": False}).astype("boolean")
     df["outcome"] = df["status"].map(OUTCOME_BY_STATUS)
     df["cancelled"] = df["outcome"].eq("Cancelled")
     df["shipped"] = df["outcome"].isin(SHIPPED_OUTCOMES)
@@ -170,6 +191,7 @@ def data_quality(raw: pd.DataFrame, lines: pd.DataFrame) -> pd.DataFrame:
         ("Conflict", ((lines["outcome"] != "Cancelled") & lines["qty"].eq(0)).sum(),
          "Line is not cancelled but quantity is 0"),
         ("Missing value", lines["amount"].isna().sum(), "Blank amount (treated as unknown, not 0)"),
+        ("Missing value", lines["b2b"].isna().sum(), "Blank B2B flag (treated as unknown)"),
         ("Missing value", lines["ship_state"].eq("UNKNOWN").sum(), "Blank or unusable ship state"),
         ("Partial day", (lines["order_date"] == first).sum(), f"Lines on the first day in the file ({first:%Y-%m-%d}); excluded from daily alerts"),
         ("Partial day", (lines["order_date"] == last).sum(), f"Lines on the last day in the file ({last:%Y-%m-%d}); excluded from daily alerts"),
@@ -182,7 +204,7 @@ def load_data(path: str | Path = DATA_FILE) -> dict[str, pd.DataFrame]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Missing {path}. Put the Amazon sales report CSV there (see README).")
-    raw = pd.read_csv(path, dtype=str)
+    raw = read_csv_text(path)
     lines = clean(raw)
     return {"lines":lines, "quality":data_quality(raw, lines) if len(lines) else pd.DataFrame(columns=["issue","lines","detail"])}
 
@@ -416,8 +438,40 @@ def run_pipeline(path: str | Path = DATA_FILE, t: Thresholds = Thresholds(), rep
     kpis = compute_kpis(data["lines"], t)
     exceptions = detect_exceptions(data, t)
     out = Path(report_dir)
-    out.mkdir(exist_ok=True)
-    exceptions.to_csv(out / "exceptions_latest.csv", index=False)
-    data["quality"].to_csv(out / "data_quality_latest.csv", index=False)
-    pd.DataFrame([{"run_at_utc":datetime.now(timezone.utc).isoformat(), **kpis, **asdict(t)}]).to_csv(out / "kpis_latest.csv", index=False)
+    out.mkdir(parents=True, exist_ok=True)
+    reports = {
+        "exceptions_latest.csv": exceptions,
+        "data_quality_latest.csv": data["quality"],
+        "kpis_latest.csv": pd.DataFrame([{"run_at_utc":datetime.now(timezone.utc).isoformat(), **kpis, **asdict(t)}]),
+    }
+    with tempfile.TemporaryDirectory(dir=out, prefix=".report-run-") as temporary:
+        staged = Path(temporary)
+        backup = staged / "previous"
+        backup.mkdir()
+        for name, frame in reports.items():
+            frame.to_csv(staged / name, index=False)
+        for name in reports:
+            target = out / name
+            if target.exists():
+                shutil.copy2(target, backup / name)
+        replaced = []
+        try:
+            for name in reports:
+                os.replace(staged / name, out / name)
+                replaced.append(name)
+        except Exception as exc:
+            rollback_errors = []
+            for name in reversed(replaced):
+                target = out / name
+                previous = backup / name
+                try:
+                    if previous.exists():
+                        os.replace(previous, target)
+                    else:
+                        target.unlink(missing_ok=True)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"{name}: {rollback_error}")
+            if rollback_errors:
+                raise OSError(f"Report publish failed ({exc}); rollback also failed: {'; '.join(rollback_errors)}") from exc
+            raise
     return {"kpis":kpis, "exceptions":exceptions}

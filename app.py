@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
@@ -9,15 +10,15 @@ from clean_report import VALIDATION_FILE
 from engine import (DATA_FILE, DATA_FILE_ENV, OUTCOMES, RAW_DATA_FILE, DataValidationError, Thresholds, aged_unshipped,
                     channel_days, complete_days, compute_kpis, customer_segments, daily_cancellations,
                     daily_sales, detect_exceptions, high_cancellation_runs, inventory_demand, is_deduplicated_copy,
-                    load_data, merchant_returns_by_state, performance_by_dimension, run_pipeline)
-from sql_demo import load_into_sqlite, cancellations_by_day, reconcile, QUERY_FILE
+                    load_data, merchant_returns_by_state, performance_by_dimension, run_pipeline,
+                    data_file_fingerprint)
+from sql_demo import load_into_sqlite, cancellations_by_day, default_date_range, reconcile, QUERY_FILE
 
 APP_DIR = Path(__file__).parent
 
 st.set_page_config(page_title="Order Fulfilment Monitoring", page_icon="📦", layout="wide")
 st.title("📦 Order Fulfilment Monitoring")
-st.caption("Portfolio demo • Public Amazon India sales report (order dates 2022-03-31 to 2022-06-29) • "
-           "Not connected to FreshDirect, Amazon, or any live system")
+st.caption("Portfolio demo • Historical order report • Not connected to a live warehouse system")
 if is_deduplicated_copy(DATA_FILE):
     removed = json.loads(VALIDATION_FILE.read_text())["duplicate_candidates_removed"] if VALIDATION_FILE.exists() else "?"
     data_kind = (f"candidate-deduplicated copy of {RAW_DATA_FILE.name}: {removed} duplicate candidates removed "
@@ -28,8 +29,8 @@ st.caption(f"Data file: **{DATA_FILE.name}** • {data_kind}"
            + (f" • set by {DATA_FILE_ENV}" if os.environ.get(DATA_FILE_ENV) else "")
            + " • Missing values are kept as unknown, not filled.")
 
-@st.cache_data(show_spinner="Loading order lines…")
-def cached_data(path):
+@st.cache_data(show_spinner="Loading order lines…", max_entries=3)
+def cached_data(path, content_hash):
     return load_data(path)
 
 def pct(x):
@@ -48,7 +49,8 @@ with st.sidebar:
     run_clicked = st.button("Write report CSVs", type="primary", width="stretch")
 
 try:
-    data = cached_data(DATA_FILE)
+    data_signature = data_file_fingerprint(DATA_FILE)
+    data = cached_data(DATA_FILE, data_signature)
 except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
@@ -58,8 +60,12 @@ except DataValidationError as exc:
     st.stop()
 
 if run_clicked:
-    result = run_pipeline(DATA_FILE, t, APP_DIR / "reports")
-    st.toast(f"Wrote reports/ with {len(result['exceptions'])} exceptions.")
+    try:
+        result = run_pipeline(DATA_FILE, t, APP_DIR / "reports")
+    except OSError as exc:
+        st.error(f"Could not write report CSVs: {exc}")
+    else:
+        st.toast(f"Wrote reports/ with {len(result['exceptions'])} exceptions.")
 
 lines = data["lines"]
 kpis = compute_kpis(lines, t)
@@ -82,6 +88,15 @@ tab1, tab_sales, tab_customers, tab_inventory, tab_fulfilment, tab2, tab3, tab4,
      "Cancellations", "Returns by state", "Unshipped & data quality", "Exceptions", "SQL check", "Improvement workflow"]
 )
 with tab1:
+    if lines.empty:
+        st.info("The selected file contains no order lines. Status is treated as a snapshot; order dates are not ship dates.")
+    else:
+        first_order_date = lines["order_date"].min().date()
+        last_order_date = lines["order_date"].max().date()
+        st.info(
+            f"Data coverage: {first_order_date:%Y-%m-%d} to {last_order_date:%Y-%m-%d} "
+            f"({len(lines):,} order lines). Status is treated as a snapshot; order dates are not ship dates."
+        )
     left,right = st.columns(2)
     with left:
         st.subheader("Order lines by day")
@@ -223,13 +238,25 @@ with tab6:
     else:
         lo = valid_dates.min().date()
         hi = valid_dates.max().date()
-    start = mid.date_input("Start date", value=date(2022, 4, 10), min_value=lo, max_value=hi)
-    end = right.date_input("End date", value=date(2022, 4, 20), min_value=lo, max_value=hi)
+    start_default, end_default = default_date_range(lo, hi)
+    start = mid.date_input("Start date", value=start_default, min_value=lo, max_value=hi,
+                           key=f"sql_start_date_{data_signature}")
+    end = right.date_input("End date", value=end_default, min_value=lo, max_value=hi,
+                           key=f"sql_end_date_{data_signature}")
     st.code(QUERY_FILE.read_text(), language="sql")
-    sql_result = cancellations_by_day(load_into_sqlite(lines), fulfilment, str(start), str(end))
+    if start > end:
+        st.warning("Start date must be on or before end date.")
+        sql_result = pd.DataFrame(columns=["order_date", "order_lines", "cancelled_lines", "cancelled_pct"])
+        comparison = pd.DataFrame()
+        matches = False
+    else:
+        with closing(load_into_sqlite(lines)) as sql_conn:
+            sql_result = cancellations_by_day(sql_conn, fulfilment, str(start), str(end))
+            matches, comparison = reconcile(sql_result, lines, fulfilment, str(start), str(end))
     st.dataframe(sql_result, hide_index=True)
-    matches, comparison = reconcile(sql_result, lines, fulfilment, str(start), str(end))
-    if matches:
+    if start > end:
+        st.info("Choose an end date on or after the start date to run the SQL check.")
+    elif matches:
         st.success("SQL result matches the pandas calculation (engine.daily_cancellations).")
     else:
         st.error("SQL and pandas results differ:")

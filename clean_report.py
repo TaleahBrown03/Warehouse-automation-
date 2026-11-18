@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from engine import CLEANED_DATA_FILE, RAW_DATA_FILE, SOURCE_INDEX_COLUMN, clean, data_quality, duplicate_candidates
+from engine import (CLEANED_DATA_FILE, RAW_DATA_FILE, SOURCE_INDEX_COLUMN, clean, data_quality,
+                    duplicate_candidates, read_csv_text)
 
 PROJECT_DIR = Path(__file__).parent
 VALIDATION_FILE = PROJECT_DIR / "data" / "amazon_sale_report_validation.json"
@@ -45,7 +46,7 @@ def sha256(path: Path) -> str:
 
 def read_as_text(path: Path) -> pd.DataFrame:
     """Every field as text. Only empty fields become blank; text such as 'NA' or 'null' is kept as written."""
-    return pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""])
+    return read_csv_text(path)
 
 
 def _line_ending(path: Path) -> str:
