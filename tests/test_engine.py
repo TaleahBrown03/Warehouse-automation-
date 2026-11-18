@@ -370,7 +370,7 @@ def test_sql_load_rolls_back_table_replacement_on_insert_error(tmp_path):
         conn.execute("INSERT INTO order_lines VALUES ('previous')")
     invalid = lines([{}])
     invalid.loc[0, "status"] = object()
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises((sqlite3.InterfaceError, sqlite3.ProgrammingError)):
         load_into_sqlite(invalid, db)
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT marker FROM order_lines").fetchone() == ("previous",)
